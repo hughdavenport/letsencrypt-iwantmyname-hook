@@ -12,6 +12,8 @@ hook_stage = ARGV[0]
 domain = ARGV[1]
 txt_challenge = ARGV[3]
 
+exit unless %[deploy_challenge clean_challenge].include?(hook_stage)
+
 hostname = ""
 
 agent = Mechanize.new
