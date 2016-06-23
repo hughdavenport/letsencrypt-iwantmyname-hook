@@ -5,6 +5,7 @@ require 'mechanize'
 require 'date'
 require 'pp'
 require 'resolv'
+require 'json'
 
 DEBUG = false
 
