@@ -9,6 +9,13 @@ require 'json'
 
 DEBUG = false
 
+use_api = true
+special_characters = %w[: $ ? @]
+if special_characters.any? { |char| @password.include?(char) }
+  use_api = false
+  puts "Not using DDNS API due to special characters in password"
+end
+
 hook_stage = ARGV[0]
 domain = ARGV[1]
 txt_challenge = ARGV[3]
@@ -19,43 +26,70 @@ hostname = ""
 
 agent = Mechanize.new
 
-agent.get('https://iwantmyname.com/') do |page|
-  page = page.form_with(:action => '/signin') do |form|
-    form.username = @username
-    form.password = @password
-  end.click_button
 
-  page = agent.click(page.link_with(:text => /Domains/))
+if use_api
+  hostname = "_acme-challenge.#{domain}"
+  agent.add_auth('https://iwantmyname.com/', @username, @password)
+  agent.get("https://iwantmyname.com/basicauth/ddns?hostname=#{hostname}&type=TXT&value=#{txt_challenge}")
+else
+  agent.get('https://iwantmyname.com/') do |page|
+    page = page.form_with(:action => '/signin') do |form|
+      form.username = @username
+      form.password = @password
+    end.click_button
 
-  domains = page.links_with(:href => /^\/dashboard\/domains\/edit\//).map(&:text)
+    page = agent.click(page.link_with(:text => /Domains/))
 
-  while ! domains.include?(domain)
-    puts "Splitting #{domain}"
-    start, domain = domain.split(/\./, 2)
-    hostname += "#{"." unless hostname.empty?}#{start}"
-    exit if domain.empty?
-  end
+    domains = page.links_with(:href => /^\/dashboard\/domains\/edit\//).map(&:text)
 
-  puts "Top domain is #{domain}"
+    while ! domains.include?(domain)
+      puts "Splitting #{domain}"
+      start, domain = domain.split(/\./, 2)
+      hostname += "#{"." unless hostname.empty?}#{start}"
+      exit if domain.empty?
+    end
 
-  hostname = "_acme-challenge#{"." unless hostname.empty?}#{hostname}"
+    puts "Top domain is #{domain}"
 
-  page = agent.get("/dashboard/dns/#{domain}")
+    hostname = "_acme-challenge#{"." unless hostname.empty?}#{hostname}"
 
-  # Required otherwise add will just remove everything but this!
-  rrset_response = agent.get("/dashboard/dns/list/#{domain}/#{DateTime.now.strftime("%Q")}")
-  rrset = JSON.parse(rrset_response.body)["rr"]
-  pp rrset if DEBUG
-  id = rrset.index { |rr| rr["type"] == "TXT" && rr["name"] == hostname }
+    page = agent.get("/dashboard/dns/#{domain}")
 
-  csrf_token = page.at('meta').attributes['content'].value
+    # Required otherwise add will just remove everything but this!
+    rrset_response = agent.get("/dashboard/dns/list/#{domain}/#{DateTime.now.strftime("%Q")}")
+    rrset = JSON.parse(rrset_response.body)["rr"]
+    pp rrset if DEBUG
+    id = rrset.index { |rr| rr["type"] == "TXT" && rr["name"] == hostname }
 
-  headers = {
-  "X-CSRF-Token" => csrf_token,
-  }
+    csrf_token = page.at('meta').attributes['content'].value
 
-  if hook_stage == "deploy_challenge"
-    if id
+    headers = {
+    "X-CSRF-Token" => csrf_token,
+    }
+
+    if hook_stage == "deploy_challenge"
+      if id
+        old_value = rrset[id]["value"]
+
+        data = {
+          "id" => id
+        }
+
+        puts "Removing TXT record for #{hostname}, was \"#{old_value}\""
+        response = agent.post("/dashboard/dns/delete/#{domain}", data, headers)
+      end
+
+      data = {
+        "name"  => hostname,
+        "type"  => "TXT",
+        "value" => txt_challenge,
+        "prio"  => "",
+        "ttl"   => 3600,
+      }
+
+      puts "Adding TXT record for #{hostname}, value of \"#{txt_challenge}\""
+      response = agent.post("/dashboard/dns/add/#{domain}", data, headers)
+    elsif hook_stage == "clean_challenge" && id
       old_value = rrset[id]["value"]
 
       data = {
@@ -66,35 +100,15 @@ agent.get('https://iwantmyname.com/') do |page|
       response = agent.post("/dashboard/dns/delete/#{domain}", data, headers)
     end
 
+    # Commit the data
     data = {
-      "name"  => hostname,
-      "type"  => "TXT",
-      "value" => txt_challenge,
-      "prio"  => "",
-      "ttl"   => 3600,
+      "csrf_token" => csrf_token,
+      "commit"     => "",
     }
 
-    puts "Adding TXT record for #{hostname}, value of \"#{txt_challenge}\""
-    response = agent.post("/dashboard/dns/add/#{domain}", data, headers)
-  elsif hook_stage == "clean_challenge" && id
-    old_value = rrset[id]["value"]
-
-    data = {
-      "id" => id
-    }
-
-    puts "Removing TXT record for #{hostname}, was \"#{old_value}\""
-    response = agent.post("/dashboard/dns/delete/#{domain}", data, headers)
+    puts "Committing changes"
+    response = agent.post("/dashboard/dns/commit/#{domain}", data)
   end
-
-  # Commit the data
-  data = {
-    "csrf_token" => csrf_token,
-    "commit"     => "",
-  }
-
-  puts "Committing changes"
-  response = agent.post("/dashboard/dns/commit/#{domain}", data)
 end
 
 if hook_stage == "deploy_challenge"
