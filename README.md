@@ -26,7 +26,8 @@ Download the files for installation
 
 ## Usage
 ``` bash
-$ ./letsencrypt.sh -c -t dns-01 -d allthethings.co.nz -d www.allthethings.co.nz -k ./hooks/iwantmyname/iwantmyname-hook.rb
+$ cd letsencrypt.sh
+$ ./dehydrated -c -t dns-01 -d allthethings.co.nz -d www.allthethings.co.nz -k ./hooks/iwantmyname/iwantmyname-hook.rb
 #
 # !! WARNING !! No main config file found, using default config!
 #
